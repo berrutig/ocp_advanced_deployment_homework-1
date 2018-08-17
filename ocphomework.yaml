@@ -1,0 +1,111 @@
+---
+- name: Set GUID for all hosts
+  hosts: all
+  tasks:
+    - name: All GUID env variable
+      shell: export GUID=`hostname | cut -d"." -f2`; echo "export GUID=$GUID" >> $HOME/.bashrc
+
+- name: Check docker's status is active
+  hosts: nodes
+  tasks:
+    - name: docker restart
+      shell: systemctl status docker | grep Active
+
+- name: Check NFS are shared
+  hosts: nfs
+  tasks:
+    - name: Check NFS are shared
+      shell: exportfs
+
+- name: Install openshift client
+  hosts: localhost
+  tasks:
+    - name: Install packages
+      yum:
+        name:
+          - atomic-openshift-utils
+          - atomic-openshift-clients
+        state: present
+
+- name: Create inventory hosts file
+  hosts: localhost
+  tasks:
+    - name: Create inventory hosts file
+      script: ./scripts/create_inventory.sh
+
+- name: Execute prerequisites
+  import_playbook: /usr/share/ansible/openshift-ansible/playbooks/prerequisites.yml
+
+- name: Execute deploy_cluste
+  import_playbook: /usr/share/ansible/openshift-ansible/playbooks/deploy_cluster.yml
+
+- name: Check OCP Cluster status
+  hosts: masters[0]
+  tasks:
+    - name: copy the .kube directory from master1 to target path
+      fetch:
+        src: /root/.kube/config
+        dest: /root/.kube/config
+        flat: yes
+
+- name: Post installation
+  hosts: localhost
+  tasks:
+    - name: make sure login with system:dmin
+      shell: oc whoami | grep system:admin
+    - name: grant user1 to admin
+      shell: oc adm policy add-cluster-role-to-user cluster-admin user1
+
+- name: Create PVs
+  hosts: nfs
+  tasks:
+    - name: Create PVs
+      script: ./scripts/create_pvs.sh
+    - name: Restarting NFS Server...
+      shell: systemctl restart nfs-server
+
+- name: Create 25 files for 5G and 10G PVs
+  hosts: localhost
+  tasks:
+    - name: Create 25 files for 5G PVs
+      script: ./scripts/pvs_5G.sh
+    - name: Create 25 files for 10G PVs
+      script: ./scripts/pvs_10G.sh
+
+- name: Create all PVs for OCP
+  hosts: localhost
+  tasks:
+    - name: Create all PVs for OCP
+      shell: cat /root/pvs/* | oc create -f -
+
+- name: Tagging recycler image
+  hosts: nodes
+  tasks:
+    - name: Pulling ose recycler image
+      shell: docker pull registry.access.redhat.com/openshift3/ose-recycler:latest
+    - name: Tagging ose recycler image
+      shell: docker tag registry.access.redhat.com/openshift3/ose-recycler:latest registry.access.redhat.com/openshift3/ose-recycler:v3.9.30
+
+- name: Smoke Test
+  hosts: localhost
+  tasks:
+    - name: Smoke Test
+      script: ./scripts/smoke.sh
+
+- name: CI/CD Test
+  hosts: localhost
+  tasks:
+    - name: CI/CD Test
+      script: ./scripts/cicd.sh 
+
+- name: HPA Test
+  hosts: localhost
+  tasks:
+    - name: HPA Test
+      shell: oc autoscale dc/openshift-tasks --min=1 --max=3 --cpu-percent=50 -n basic-spring-boot-prod
+
+- name: Multitenancy Test
+  hosts: localhost
+  tasks:
+    - name: Multitenancy Test
+      script: ./scripts/multitenancy.sh
